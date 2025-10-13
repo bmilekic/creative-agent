@@ -45,6 +45,7 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+coverage.json
 *.cover
 *.py.cover
 .hypothesis/
@@ -210,3 +211,6 @@ __marimo__/
 /test_*.py
 /test_*.json
 /setup_bucket_policy.py
+
+# Schema generation temporary files
+temp_resolved_schemas/

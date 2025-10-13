@@ -9,13 +9,21 @@ from typing import Any
 from fastmcp import FastMCP
 
 from .data.standard_formats import (
+    AGENT_CAPABILITIES,
+    AGENT_NAME,
     AGENT_URL,
     filter_formats,
     get_format_by_id,
 )
-from .schemas.build import BuildCreativeRequest, BuildCreativeResponse, CreativeOutput
-from .schemas.format import ListCreativeFormatsResponse
-from .schemas.manifest import PreviewCreativeRequest, PreviewCreativeResponse, PreviewVariant
+from .schemas import (
+    BuildCreativeRequest,
+    BuildCreativeResponse,
+    CreativeOutput,
+    ListCreativeFormatsResponse,
+    PreviewCreativeRequest,
+    PreviewCreativeResponse,
+    PreviewVariant,
+)
 
 mcp = FastMCP("adcp-creative-agent")
 
@@ -26,6 +34,11 @@ def list_creative_formats(
     type: str | None = None,
     asset_types: list[str] | None = None,
     dimensions: str | None = None,
+    max_width: int | None = None,
+    max_height: int | None = None,
+    min_width: int | None = None,
+    min_height: int | None = None,
+    is_responsive: bool | None = None,
     name_search: str | None = None,
 ) -> str:
     """List all available AdCP creative formats with optional filtering.
@@ -34,28 +47,67 @@ def list_creative_formats(
         format_ids: Return only these specific format IDs
         type: Filter by format type (audio, video, display, dooh, native, interactive)
         asset_types: Filter to formats that include these asset types
-        dimensions: Filter to formats with specific dimensions (e.g., "300x250")
+        dimensions: (Deprecated) Filter to formats with specific dimensions (e.g., "300x250"). Use min/max filters instead.
+        max_width: Maximum width in pixels (inclusive). Returns formats with width <= this value.
+        max_height: Maximum height in pixels (inclusive). Returns formats with height <= this value.
+        min_width: Minimum width in pixels (inclusive). Returns formats with width >= this value.
+        min_height: Minimum height in pixels (inclusive). Returns formats with height >= this value.
+        is_responsive: Filter to responsive formats (adapt to container size)
         name_search: Search for formats by name (case-insensitive partial match)
 
     Returns:
         JSON string with format list response
     """
     try:
+        # Cast asset_types to the expected type (filter_formats accepts str or AssetType)
         formats = filter_formats(
             format_ids=format_ids,
             type=type,
-            asset_types=asset_types,
+            asset_types=asset_types,  # type: ignore[arg-type]  # filter_formats accepts list[str]
             dimensions=dimensions,
+            max_width=max_width,
+            max_height=max_height,
+            min_width=min_width,
+            min_height=min_height,
+            is_responsive=is_responsive,
             name_search=name_search,
         )
 
+        # Import required types
+        from .schemas_generated._schemas_v1_media_buy_list_creative_formats_response_json import (
+            Capability,
+            CreativeAgent,
+            Status,
+        )
+        from .schemas_generated._schemas_v1_media_buy_list_creative_formats_response_json import (
+            Format as ResponseFormat,
+        )
+
+        # Convert capability strings to Capability enum
+        capabilities_enum = [Capability(cap) for cap in AGENT_CAPABILITIES]
+
+        # Convert core Format objects to response Format objects
+        response_formats = [ResponseFormat(**fmt.model_dump(exclude_unset=True)) for fmt in formats]
+
         response = ListCreativeFormatsResponse(
-            formats=formats,
+            status=Status.completed,
+            formats=response_formats,
+            creative_agents=[
+                CreativeAgent(
+                    agent_url=AGENT_URL,
+                    agent_name=AGENT_NAME,
+                    capabilities=capabilities_enum,
+                )
+            ],
         )
 
         return response.model_dump_json(indent=2)
+    except ValueError as e:
+        return json.dumps({"error": f"Invalid input: {e}"}, indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        import traceback
+
+        return json.dumps({"error": f"Server error: {e}", "traceback": traceback.format_exc()[-500:]}, indent=2)
 
 
 @mcp.tool()
@@ -84,20 +136,17 @@ def preview_creative(
     """
     try:
         # Import schema types
-        from .schemas.manifest import CreativeManifest, PreviewInput
-
-        # Parse manifest dict into CreativeManifest
-        manifest_obj = CreativeManifest(**creative_manifest)
+        from .schemas.manifest import PreviewInput
 
         # Parse inputs if provided
         inputs_obj: list[PreviewInput] | None = None
         if inputs:
             inputs_obj = [PreviewInput(**inp) for inp in inputs]
 
-        # Parse request
+        # Parse request (creative_manifest stays as dict)
         request = PreviewCreativeRequest(
             format_id=format_id,
-            creative_manifest=manifest_obj,
+            creative_manifest=creative_manifest,
             inputs=inputs_obj,
             template_id=template_id,
             brand_card=brand_card,
@@ -114,10 +163,11 @@ def preview_creative(
             )
 
         # Validate manifest format_id matches
-        if request.creative_manifest.format_id != request.format_id:
+        manifest_format_id = request.creative_manifest.get("format_id")
+        if manifest_format_id != request.format_id:
             return json.dumps(
                 {
-                    "error": f"Manifest format_id '{request.creative_manifest.format_id}' does not match request format_id '{request.format_id}'"
+                    "error": f"Manifest format_id '{manifest_format_id}' does not match request format_id '{request.format_id}'"
                 },
                 indent=2,
             )
@@ -165,8 +215,15 @@ def preview_creative(
         )
 
         return response.model_dump_json(indent=2)
+    except ValueError as e:
+        return json.dumps({"error": f"Invalid input: {e}"}, indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        import traceback
+
+        return json.dumps(
+            {"error": f"Preview generation failed: {e}", "traceback": traceback.format_exc()[-500:]},
+            indent=2,
+        )
 
 
 def _generate_preview_variant(
@@ -182,17 +239,20 @@ def _generate_preview_variant(
     # Build hints based on format type
     hints = PreviewHints()
 
-    if format_obj.type == "video":
+    # Import Type enum for comparisons
+    from .schemas_generated._schemas_v1_core_format_json import Type
+
+    if format_obj.type == Type.video:
         hints.primary_media_type = "video"
         hints.contains_audio = True
-        if format_obj.requirements and format_obj.requirements.duration_seconds:
-            hints.estimated_duration_seconds = format_obj.requirements.duration_seconds
-    elif format_obj.type == "audio":
+        if format_obj.requirements and format_obj.requirements.get("duration_seconds"):
+            hints.estimated_duration_seconds = format_obj.requirements["duration_seconds"]
+    elif format_obj.type == Type.audio:
         hints.primary_media_type = "audio"
         hints.contains_audio = True
-        if format_obj.requirements and format_obj.requirements.duration_seconds:
-            hints.estimated_duration_seconds = format_obj.requirements.duration_seconds
-    elif format_obj.type in ["display", "native", "dooh"]:
+        if format_obj.requirements and format_obj.requirements.get("duration_seconds"):
+            hints.estimated_duration_seconds = format_obj.requirements["duration_seconds"]
+    elif format_obj.type in [Type.display, Type.native, Type.dooh]:
         hints.primary_media_type = "image"
         hints.contains_audio = False
     else:
@@ -208,7 +268,7 @@ def _generate_preview_variant(
     embedding = PreviewEmbedding(
         recommended_sandbox="allow-scripts allow-same-origin",
         requires_https=False,
-        supports_fullscreen=format_obj.type in ["video", "interactive"],
+        supports_fullscreen=format_obj.type in [Type.video, Type.rich_media],
     )
 
     return PreviewVariant(
@@ -252,6 +312,13 @@ def build_creative(
         JSON string with build response containing creative manifest
     """
     try:
+        # Validate message length
+        if not message or len(message) > 10000:
+            return json.dumps(
+                {"error": "Message must be between 1 and 10000 characters"},
+                indent=2,
+            )
+
         # Validate API key is provided
         if not gemini_api_key:
             return json.dumps(
@@ -311,9 +378,11 @@ def build_creative(
                 indent=2,
             )
 
-        # For universal/generative formats, get the output format for asset requirements
+        # For generative formats (identified by having output_format_ids),
+        # get the output format for asset requirements
         output_fmt = fmt
-        if fmt.type == "universal" and fmt.output_format_ids and len(fmt.output_format_ids) > 0:
+        if fmt.output_format_ids and len(fmt.output_format_ids) > 0:
+            # Use the first output format ID
             output_fmt_result = get_format_by_id(fmt.output_format_ids[0])
             if not output_fmt_result:
                 return json.dumps(
@@ -329,26 +398,53 @@ def build_creative(
         client = genai.Client(api_key=request.gemini_api_key)
 
         # Build prompt for creative generation
-        # For universal/generative formats, describe what we're generating (the output format)
-        target_format = output_fmt if fmt.type == "universal" else fmt
+        # For generative formats, describe what we're generating (the output format)
+        is_generative = fmt.output_format_ids and len(fmt.output_format_ids) > 0
+        target_format = output_fmt if is_generative else fmt
 
         format_spec = f"""Format: {fmt.name}
-Type: {fmt.type}
+Type: {fmt.type.value}
 Description: {fmt.description}
 """
 
-        if fmt.type == "universal":
+        if is_generative:
             format_spec += f"\nThis will generate a: {output_fmt.name}\n"
-            if output_fmt.dimensions:
-                format_spec += f"Dimensions: {output_fmt.dimensions}\n"
+            if output_fmt.requirements and output_fmt.requirements.get("dimensions"):
+                format_spec += f"Dimensions: {output_fmt.requirements['dimensions']}\n"
 
         format_spec += "\nRequired Assets:\n"
 
-        for asset_req in target_format.assets_required:
-            format_spec += f"- {asset_req.asset_role} ({asset_req.asset_type})"
-            if asset_req.width and asset_req.height:
-                format_spec += f" - {asset_req.width}x{asset_req.height}"
-            format_spec += f": {asset_req.description or 'N/A'}\n"
+        if target_format.assets_required:
+            from .schemas_generated._schemas_v1_core_format_json import AssetsRequired1
+
+            for asset_req in target_format.assets_required:
+                # Handle both AssetsRequired and AssetsRequired1 (repeatable groups)
+                if isinstance(asset_req, AssetsRequired1):
+                    # This is a repeatable group (AssetsRequired1)
+                    format_spec += f"- {asset_req.asset_group_id} (repeatable group, {asset_req.min_count}-{asset_req.max_count} items)\n"
+                    for asset in asset_req.assets:
+                        format_spec += f"  - {asset.asset_role or asset.asset_id} ({asset.asset_type.value})"
+                        if asset.requirements:
+                            width = asset.requirements.get("width")
+                            height = asset.requirements.get("height")
+                            if width and height:
+                                format_spec += f" - {width}x{height}"
+                            desc = asset.requirements.get("description")
+                            if desc:
+                                format_spec += f": {desc}"
+                        format_spec += "\n"
+                else:
+                    # This is a regular asset (AssetsRequired)
+                    format_spec += f"- {asset_req.asset_role or asset_req.asset_id} ({asset_req.asset_type.value})"
+                    if asset_req.requirements:
+                        width = asset_req.requirements.get("width")
+                        height = asset_req.requirements.get("height")
+                        if width and height:
+                            format_spec += f" - {width}x{height}"
+                        desc = asset_req.requirements.get("description")
+                        if desc:
+                            format_spec += f": {desc}"
+                    format_spec += "\n"
 
         # Add brand context if provided (support both promoted_offerings and deprecated brand_card)
         brand_data = promoted_offerings or brand_card
@@ -378,13 +474,18 @@ Description: {fmt.description}
             if "assets" in brand_data and len(brand_data["assets"]) > 0:
                 brand_context += f"- Available Brand Assets: {len(brand_data['assets'])} assets (logos, images, etc.)\n"
 
+        # Import Type and AssetType enums for comparisons
+        from .schemas_generated._schemas_v1_core_format_json import AssetType, Type
+
         # Check if we need to generate images (check target format, not input generative format)
-        generate_images = target_format.type == "display" and any(
-            req.asset_type == "image" for req in target_format.assets_required
-        )
+        generate_images = False
+        if target_format.assets_required:
+            generate_images = target_format.type == Type.display and any(
+                req.asset_type == AssetType.image for req in target_format.assets_required if hasattr(req, "asset_type")
+            )
 
         # The format_id in the output manifest should be the OUTPUT format
-        output_format_id = output_fmt.format_id if fmt.type == "universal" else request.format_id
+        output_format_id = output_fmt.format_id if is_generative else request.format_id
 
         if generate_images:
             prompt = f"""You are a creative generation AI for advertising.
@@ -438,7 +539,38 @@ Return ONLY the JSON manifest, no additional text."""
         contents: list[Any] = [prompt]
 
         # Add brand asset images if provided (from promoted_offerings or brand_card)
+        import ipaddress
+        from urllib.parse import urlparse
+
         import httpx
+
+        def is_safe_url(url: str) -> bool:
+            """Validate URL is safe to fetch (no localhost, private IPs, etc.)."""
+            try:
+                parsed = urlparse(url)
+                if parsed.scheme not in ["http", "https"]:
+                    return False
+
+                hostname = parsed.hostname
+                if not hostname:
+                    return False
+
+                # Block localhost
+                if hostname.lower() in ["localhost", "127.0.0.1", "::1"]:
+                    return False
+
+                # Block private IP ranges
+                try:
+                    ip = ipaddress.ip_address(hostname)
+                    if ip.is_private or ip.is_loopback or ip.is_link_local:
+                        return False
+                except ValueError:
+                    # Hostname is not an IP, that's fine
+                    pass
+
+                return True
+            except Exception:
+                return False
 
         # Collect all image assets from various sources
         image_assets = []
@@ -459,9 +591,12 @@ Return ONLY the JSON manifest, no additional text."""
             if isinstance(asset, dict) and asset.get("asset_type") == "image":
                 img_url = asset.get("url")
                 if img_url:
+                    if not is_safe_url(img_url):
+                        print(f"Warning: Blocked potentially unsafe URL: {img_url}")
+                        continue
                     try:
                         # Fetch image from URL
-                        img_response = httpx.get(img_url, timeout=10.0)
+                        img_response = httpx.get(img_url, timeout=10.0, follow_redirects=False)
                         img_response.raise_for_status()
                         img_bytes = img_response.content
 
@@ -547,8 +682,8 @@ Return ONLY the JSON manifest, no additional text."""
         else:
             status = "draft"
 
-        # Build output_format_ids list for universal/generative formats
-        output_format_ids_list = fmt.output_format_ids if fmt.type == "universal" else None
+        # Build output_format_ids list for generative formats
+        output_format_ids_list = fmt.output_format_ids if is_generative else None
 
         # Build response
         build_response = BuildCreativeResponse(
@@ -575,12 +710,22 @@ Return ONLY the JSON manifest, no additional text."""
 
     except json.JSONDecodeError as e:
         return json.dumps(
-            {"error": f"Failed to parse generated creative: {e!s}"},
+            {
+                "error": f"Failed to parse AI-generated creative: {e}",
+                "context": {"line": e.lineno, "column": e.colno, "format_id": format_id},
+            },
             indent=2,
         )
+    except ValueError as e:
+        return json.dumps({"error": f"Invalid input: {e}"}, indent=2)
     except Exception as e:
+        import traceback
+
         return json.dumps(
-            {"error": f"Creative generation failed: {e!s}"},
+            {
+                "error": f"Creative generation failed: {e}",
+                "context": {"format_id": format_id, "traceback": traceback.format_exc()[-500:]},
+            },
             indent=2,
         )
 
