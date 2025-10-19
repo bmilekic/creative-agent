@@ -207,98 +207,158 @@ class TestAssetValidation:
     def test_valid_html_asset(self):
         """Valid HTML asset should pass."""
         asset = {
-            "asset_type": "html",
             "content": "<div><h1>Test</h1></div>",
         }
-        validate_asset(asset)
+        validate_asset(asset, "html")
 
     def test_valid_css_asset(self):
         """Valid CSS asset should pass."""
         asset = {
-            "asset_type": "css",
             "content": "body { margin: 0; }",
         }
-        validate_asset(asset)
+        validate_asset(asset, "css")
 
     def test_valid_javascript_asset(self):
         """Valid JavaScript asset should pass."""
         asset = {
-            "asset_type": "javascript",
             "content": "console.log('test');",
         }
-        validate_asset(asset)
+        validate_asset(asset, "javascript")
 
     def test_valid_text_asset(self):
         """Valid text asset should pass."""
         asset = {
-            "asset_type": "text",
             "content": "This is a headline",
         }
-        validate_asset(asset)
+        validate_asset(asset, "text")
 
     def test_valid_url_asset(self):
         """Valid URL asset should pass."""
         asset = {
-            "asset_type": "url",
             "url": "https://example.com/landing",
         }
-        validate_asset(asset)
+        validate_asset(asset, "url")
 
     def test_valid_image_asset(self):
         """Valid image asset should pass."""
         asset = {
-            "asset_type": "image",
             "url": "https://example.com/image.png",
             "width": 300,
             "height": 250,
             "format": "png",
         }
-        validate_asset(asset)
+        validate_asset(asset, "image")
 
     def test_invalid_html_asset_fails(self):
         """Invalid HTML asset should fail."""
         asset = {
-            "asset_type": "html",
             "content": "Not HTML content",
         }
         with pytest.raises(AssetValidationError, match="must contain valid HTML tags"):
-            validate_asset(asset)
+            validate_asset(asset, "html")
 
     def test_invalid_image_dimensions_fail(self):
         """Image with invalid dimensions should fail."""
         asset = {
-            "asset_type": "image",
             "url": "https://example.com/image.png",
             "width": 0,
         }
         with pytest.raises(AssetValidationError, match="must be a positive integer"):
-            validate_asset(asset)
+            validate_asset(asset, "image")
 
     def test_invalid_image_format_fails(self):
         """Image with invalid format should fail."""
         asset = {
-            "asset_type": "image",
             "url": "https://example.com/image.png",
             "format": "exe",
         }
         with pytest.raises(AssetValidationError, match="format not allowed"):
-            validate_asset(asset)
+            validate_asset(asset, "image")
 
-    def test_missing_asset_type_fails(self):
-        """Asset without asset_type should fail."""
+    def test_empty_asset_fails(self):
+        """Empty asset should fail when required fields are missing."""
         asset = {
             "content": "test",
         }
-        with pytest.raises(AssetValidationError, match="must have asset_type"):
-            validate_asset(asset)
+        with pytest.raises(AssetValidationError, match="Image asset must have string url"):
+            validate_asset(asset, "image")
 
     def test_unknown_asset_type_fails(self):
         """Asset with unknown type should fail."""
-        asset = {
-            "asset_type": "unknown",
-        }
+        asset = {"content": "test"}
         with pytest.raises(AssetValidationError, match="Unknown asset_type"):
-            validate_asset(asset)
+            validate_asset(asset, "unknown")
+
+    def test_valid_vast_with_url(self):
+        """Valid VAST asset with url should pass."""
+        asset = {
+            "url": "https://example.com/vast.xml",
+        }
+        validate_asset(asset, "vast")
+
+    def test_valid_vast_with_content(self):
+        """Valid VAST asset with content should pass."""
+        asset = {
+            "content": "<VAST version='4.0'>...</VAST>",
+        }
+        validate_asset(asset, "vast")
+
+    def test_vast_with_both_url_and_content_fails(self):
+        """VAST asset with both url and content should fail."""
+        asset = {
+            "url": "https://example.com/vast.xml",
+            "content": "<VAST version='4.0'>...</VAST>",
+        }
+        with pytest.raises(AssetValidationError, match="must have url or content, not both"):
+            validate_asset(asset, "vast")
+
+    def test_vast_without_url_or_content_fails(self):
+        """VAST asset without url or content should fail."""
+        asset = {}
+        with pytest.raises(AssetValidationError, match="must have either url or content"):
+            validate_asset(asset, "vast")
+
+    def test_valid_daast_with_url(self):
+        """Valid DAAST asset with url should pass."""
+        asset = {
+            "url": "https://example.com/daast.xml",
+        }
+        validate_asset(asset, "daast")
+
+    def test_valid_daast_with_content(self):
+        """Valid DAAST asset with content should pass."""
+        asset = {
+            "content": "<DAAST version='1.0'>...</DAAST>",
+        }
+        validate_asset(asset, "daast")
+
+    def test_daast_with_both_url_and_content_fails(self):
+        """DAAST asset with both url and content should fail."""
+        asset = {
+            "url": "https://example.com/daast.xml",
+            "content": "<DAAST version='1.0'>...</DAAST>",
+        }
+        with pytest.raises(AssetValidationError, match="must have url or content, not both"):
+            validate_asset(asset, "daast")
+
+    def test_daast_without_url_or_content_fails(self):
+        """DAAST asset without url or content should fail."""
+        asset = {}
+        with pytest.raises(AssetValidationError, match="must have either url or content"):
+            validate_asset(asset, "daast")
+
+    def test_valid_webhook(self):
+        """Valid webhook asset should pass."""
+        asset = {
+            "url": "https://example.com/webhook",
+        }
+        validate_asset(asset, "webhook")
+
+    def test_webhook_without_url_fails(self):
+        """Webhook asset without url should fail."""
+        asset = {}
+        with pytest.raises(AssetValidationError, match="Webhook asset must have url"):
+            validate_asset(asset, "webhook")
 
 
 class TestManifestValidation:
@@ -313,17 +373,14 @@ class TestManifestValidation:
             },
             "assets": {
                 "headline": {
-                    "asset_type": "text",
                     "content": "Buy Now!",
                 },
                 "background": {
-                    "asset_type": "image",
                     "url": "https://example.com/bg.png",
                     "width": 300,
                     "height": 250,
                 },
                 "clickthrough": {
-                    "asset_type": "url",
                     "url": "https://example.com/landing",
                 },
             },
@@ -340,7 +397,6 @@ class TestManifestValidation:
             },
             "assets": {
                 "headline": {
-                    "asset_type": "text",
                     "content": "",  # Invalid empty text
                 },
             },
@@ -359,11 +415,9 @@ class TestManifestValidation:
             },
             "assets": {
                 "headline": {
-                    "asset_type": "text",
                     "content": "",  # Invalid
                 },
                 "background": {
-                    "asset_type": "image",
                     "url": "javascript:alert('xss')",  # Invalid
                 },
             },
@@ -390,3 +444,39 @@ class TestManifestValidation:
         errors = validate_manifest_assets("not a dict")
         assert len(errors) == 1
         assert "must be a dictionary" in errors[0]
+
+    def test_valid_promoted_offerings_with_url(self):
+        """Valid promoted offerings with brand manifest URL should pass."""
+        asset = {
+            "brand_manifest": "https://brand.example.com/manifest.json",
+        }
+        validate_asset(asset, "promoted_offerings")
+
+    def test_valid_promoted_offerings_with_inline_manifest(self):
+        """Valid promoted offerings with inline brand manifest should pass."""
+        asset = {
+            "brand_manifest": {
+                "url": "https://brand.example.com",
+                "name": "ACME Corp",
+            },
+        }
+        validate_asset(asset, "promoted_offerings")
+
+    def test_valid_promoted_offerings_with_name_only(self):
+        """Valid promoted offerings with name-only brand manifest should pass."""
+        asset = {
+            "brand_manifest": {
+                "name": "ACME Corp",
+            },
+        }
+        validate_asset(asset, "promoted_offerings")
+
+    def test_promoted_offerings_inline_manifest_without_url_or_name_fails(self):
+        """Promoted offerings with inline manifest missing url and name should fail."""
+        asset = {
+            "brand_manifest": {
+                "colors": {"primary": "#FF0000"},
+            },
+        }
+        with pytest.raises(AssetValidationError, match="must have either url or name"):
+            validate_asset(asset, "promoted_offerings")
